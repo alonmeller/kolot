@@ -1,0 +1,73 @@
+name: Build Kolot (macOS)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Configure (universal: Apple Silicon + Intel)"
+        run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build AU, VST3 and Standalone
+        run: cmake --build build --config Release --target Kolot_AU Kolot_VST3 Kolot_Standalone -- -quiet
+
+      - name: Sign (ad-hoc) and stage
+        run: |
+          set -e
+          OUT=build/Kolot_artefacts/Release
+          mkdir -p dist
+          cp -R "$OUT/AU/Kolot.component" dist/
+          cp -R "$OUT/VST3/Kolot.vst3" dist/
+          cp -R "$OUT/Standalone/Kolot.app" dist/
+          codesign --force --deep -s - dist/Kolot.component dist/Kolot.vst3 dist/Kolot.app
+
+      - name: Build installer package (.pkg)
+        run: |
+          set -e
+          VERSION=$(grep -m1 -oE 'project\(Kolot VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
+          ROOT=pkgroot
+          mkdir -p "$ROOT/Library/Audio/Plug-Ins/Components" "$ROOT/Library/Audio/Plug-Ins/VST3" "$ROOT/Applications"
+          cp -R dist/Kolot.component "$ROOT/Library/Audio/Plug-Ins/Components/"
+          cp -R dist/Kolot.vst3      "$ROOT/Library/Audio/Plug-Ins/VST3/"
+          cp -R dist/Kolot.app       "$ROOT/Applications/"
+          # Never let the installer "relocate" bundles to other copies it finds on the disk.
+          pkgbuild --analyze --root "$ROOT" components.plist
+          i=0
+          while /usr/libexec/PlistBuddy -c "Print :$i" components.plist >/dev/null 2>&1; do
+            /usr/libexec/PlistBuddy -c "Set :$i:BundleIsRelocatable false" components.plist
+            i=$((i+1))
+          done
+          echo "bundles marked non-relocatable: $i"
+          pkgbuild --root "$ROOT" --component-plist components.plist \
+                   --identifier com.alonmeller.kolot --version "$VERSION" \
+                   --install-location / --scripts install/pkg-scripts \
+                   "Kolot Installer.pkg"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build disk image (.dmg)
+        run: |
+          set -e
+          mkdir -p dmg
+          cp "Kolot Installer.pkg" dmg/
+          cp install/dmg-readme.txt "dmg/Read Me.txt"
+          hdiutil create -volname "Kolot ${VERSION}" -srcfolder dmg -fs HFS+ -format UDZO -ov "Kolot-${VERSION}.dmg"
+          hdiutil verify "Kolot-${VERSION}.dmg"
+
+      - name: Validate the Audio Unit (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R dist/Kolot.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aumu Klot Alnm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kolot-dmg
+          path: Kolot-*.dmg
