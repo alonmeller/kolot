@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Kolot VERSION 1.0.0)
+project(Kolot VERSION 2.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,20 +31,22 @@ juce_add_plugin(Kolot
     PLUGIN_MANUFACTURER_CODE Alnm
     PLUGIN_CODE Klot
     PRODUCT_NAME "Kolot"
-    DESCRIPTION "Turns one vocal into a choir"
-    IS_SYNTH TRUE
-    NEEDS_MIDI_INPUT TRUE
+    DESCRIPTION "Sings the track it is on with a whole choir"
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    AU_MAIN_TYPE kAudioUnitType_MusicDevice
-    VST3_CATEGORIES Instrument Synth
+    AU_MAIN_TYPE kAudioUnitType_Effect
+    VST3_CATEGORIES Fx Pitch Shift
     COPY_PLUGIN_AFTER_BUILD FALSE
     FORMATS ${KOLOT_FORMATS})
 
 set(KOLOT_DSP_SOURCES
-    Source/ChoirEngine.cpp
-    Source/Finisher.cpp)
+    Source/RealtimeChoir.cpp
+    Source/LiveFinisher.cpp)
+
+juce_add_binary_data(KolotAssets SOURCES Resources/background.jpg)
 
 target_sources(Kolot PRIVATE
     ${KOLOT_DSP_SOURCES}
@@ -58,7 +60,7 @@ target_compile_definitions(Kolot PUBLIC
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
 target_link_libraries(Kolot
-    PRIVATE juce::juce_audio_utils juce::juce_audio_formats juce::juce_dsp
+    PRIVATE KolotAssets juce::juce_audio_utils juce::juce_audio_formats juce::juce_dsp
     PUBLIC  juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
 
 if(KOLOT_BUILD_CLI)

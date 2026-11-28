@@ -66,7 +66,7 @@ jobs:
           cp -R dist/Kolot.component ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar || true
           sleep 2
-          auval -v aumu Klot Alnm
+          auval -v aufx Klot Alnm
 
       - uses: actions/upload-artifact@v4
         with:

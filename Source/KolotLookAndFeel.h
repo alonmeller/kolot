@@ -125,7 +125,7 @@ public:
             return;
         }
 
-        g.setColour (on ? amber : (over ? panelHi.brighter (0.1f) : panelHi));
+        g.setColour (on ? amber : (over ? panelHi.brighter (0.1f).withAlpha (0.85f) : panelHi.withAlpha (0.72f)));
         g.fillRoundedRectangle (r, cr);
         g.setColour (on ? amberHot : edge);
         g.drawRoundedRectangle (r, cr, 1.0f);
@@ -147,7 +147,7 @@ public:
     {
         using namespace Colours;
         auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h).reduced (0.5f);
-        g.setColour (panelHi);
+        g.setColour (panelHi.withAlpha (0.78f));
         g.fillRoundedRectangle (r, 6.0f);
         g.setColour (box.hasKeyboardFocus (true) ? amber : edge);
         g.drawRoundedRectangle (r, 6.0f, 1.0f);

@@ -1,9 +1,8 @@
 #pragma once
-// Kolot — shared types for the choir engine, the finisher and the plugin.
+// Kolot — shared types for the real-time choir engine, the finisher and the plugin.
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
-#include <functional>
 
 namespace kolot
 {
@@ -50,7 +49,16 @@ struct ArrangeSettings
     bool thirdUp = false, thirdDown = false, fifthUp = false, fifthDown = false;
     juce::uint32 seed = 1;
     bool testSingleVoice = false;
-    bool testDropLead = false;      // diagnostics: render only the added layers   // diagnostics: one clean singer per layer
+    bool testDropLead = false;      // diagnostics: render only the added layers
+
+    bool operator== (const ArrangeSettings& o) const
+    {
+        return model == o.model && key == o.key && scale == o.scale && octaveDown == o.octaveDown
+            && octaveUp == o.octaveUp && thirdUp == o.thirdUp && thirdDown == o.thirdDown
+            && fifthUp == o.fifthUp && fifthDown == o.fifthDown && seed == o.seed
+            && testSingleVoice == o.testSingleVoice && testDropLead == o.testDropLead;
+    }
+    bool operator!= (const ArrangeSettings& o) const { return ! (*this == o); }
 };
 
 struct FinishSettings
@@ -60,22 +68,15 @@ struct FinishSettings
     float lowCutHz    = 80.0f;   // 20 = off
     float brightness  = 0.0f;    // -1 .. +1
     float reverb      = 0.25f;   // 0 .. 1
+    float mix         = 1.0f;    // 0 = only the original track, 1 = only the choir
     float outputDb    = 0.0f;
-};
 
-// Output of the (expensive) choir stage: a stereo spread and a mono sum.
-struct ChoirStems
-{
-    juce::AudioBuffer<float> stereo;  // 2 channels
-    juce::AudioBuffer<float> mono;    // 1 channel
-    double sampleRate = 48000.0;
-    bool isValid() const { return stereo.getNumSamples() > 0; }
-};
-
-struct RenderProgress
-{
-    std::atomic<float> fraction { 0.0f };
-    std::atomic<bool>  cancel   { false };
+    bool operator== (const FinishSettings& o) const
+    {
+        return mic == o.mic && stereo == o.stereo && lowCutHz == o.lowCutHz && brightness == o.brightness
+            && reverb == o.reverb && mix == o.mix && outputDb == o.outputDb;
+    }
+    bool operator!= (const FinishSettings& o) const { return ! (*this == o); }
 };
 
 } // namespace kolot

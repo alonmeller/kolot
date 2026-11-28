@@ -1,163 +1,151 @@
 #include "PluginEditor.h"
+#include "BinaryData.h"
 
 namespace kolot
 {
 using namespace Colours;
 static juce::Font F (float h, bool b = false) { return KolotLookAndFeel::font (h, b); }
 
-// ============================================================================
-juce::Rectangle<int> WaveformPanel::dragChip() const  { return { getWidth() - 214, getHeight() - 40, 200, 28 }; }
-juce::Rectangle<int> WaveformPanel::clearChip() const { return { getWidth() - 34, 10, 24, 24 }; }
-
-void WaveformPanel::drawPeaks (juce::Graphics& g, juce::Rectangle<float> r,
-                               const std::vector<std::pair<float, float>>& pk, juce::Colour c, float gain)
+static juce::String noteName (int n)
 {
-    if (pk.empty()) return;
-    const float mid = r.getCentreY(), half = r.getHeight() * 0.5f;
-    const int W = (int) r.getWidth();
-    g.setColour (c);
-    for (int x = 0; x < W; ++x)
-    {
-        const size_t i = (size_t) ((double) x / W * (double) pk.size());
-        const auto& p = pk[juce::jmin (i, pk.size() - 1)];
-        const float top = mid - juce::jmin (1.0f, p.second * gain) * half;
-        const float bot = mid - juce::jmax (-1.0f, p.first * gain) * half;
-        g.fillRect (r.getX() + (float) x, top, 1.0f, juce::jmax (1.0f, bot - top));
-    }
+    return keyNames()[((n % 12) + 12) % 12] + juce::String (n / 12 - 1);
 }
 
-void WaveformPanel::paint (juce::Graphics& g)
+static void glass (juce::Graphics& g, juce::Rectangle<float> r, float alpha = 0.74f)
 {
-    auto r = getLocalBounds().toFloat();
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff141722), 0, 0, juce::Colour (0xff0b0d13), 0, r.getBottom(), false));
+    g.setColour (juce::Colour (0xff0b0d16).withAlpha (alpha));
     g.fillRoundedRectangle (r, 12.0f);
-    g.setColour (dragOver ? amber : edge);
-    g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, dragOver ? 2.0f : 1.0f);
-
-    auto inner = r.reduced (18.0f, 34.0f);
-    const auto state = proc.getState();
-
-    if (vocalPeaks.empty())
-    {
-        // Empty state: an invitation to drop a vocal.
-        g.setColour (ivoryDim.withAlpha (0.25f));
-        const float dash[] = { 6.0f, 6.0f };
-        juce::Path p; p.addRoundedRectangle (r.reduced (14.0f), 10.0f);
-        juce::Path dashed; juce::PathStrokeType (1.2f).createDashedStroke (dashed, p, dash, 2);
-        g.fillPath (dashed);
-        g.setColour (ivory);
-        g.setFont (F (19.0f, true));
-        g.drawText ("Drop a dry, mono vocal here", getLocalBounds().withTrimmedBottom (26), juce::Justification::centred);
-        g.setColour (ivoryDim);
-        g.setFont (F (13.0f));
-        g.drawText ("or click to browse  -  WAV, AIFF, FLAC, MP3, M4A  -  one take, no doubles or harmonies",
-                    getLocalBounds().withTrimmedTop (34), juce::Justification::centred);
-        return;
-    }
-
-    // Header line: file name + length.
-    g.setColour (ivory);
-    g.setFont (F (13.0f, true));
-    const auto secs = proc.getVocalSeconds();
-    g.drawText (proc.getVocalFile().getFileName() + "   " + juce::String ((int) secs / 60) + ":"
-                + juce::String ((int) secs % 60).paddedLeft ('0', 2),
-                juce::Rectangle<int> (18, 8, getWidth() - 80, 20), juce::Justification::centredLeft);
-
-    // Clear (x)
-    auto cc = clearChip().toFloat();
-    g.setColour (ivoryDim);
-    g.drawLine (cc.getX() + 7, cc.getY() + 7, cc.getRight() - 7, cc.getBottom() - 7, 1.5f);
-    g.drawLine (cc.getRight() - 7, cc.getY() + 7, cc.getX() + 7, cc.getBottom() - 7, 1.5f);
-
-    // Vocal (ivory, faint) under the choir (amber).
-    drawPeaks (g, inner, vocalPeaks, ivory.withAlpha (choirPeaks.empty() ? 0.75f : 0.22f), 1.0f);
-    if (! choirPeaks.empty())
-    {
-        juce::Rectangle<float> cr = inner;
-        drawPeaks (g, cr, choirPeaks, amber.withAlpha (0.85f), 1.0f);
-    }
-
-    // Playhead
-    if (proc.isPreviewPlaying())
-    {
-        const float x = inner.getX() + inner.getWidth() * (float) proc.getPreviewPosition();
-        g.setColour (amberHot);
-        g.fillRect (x, inner.getY() - 6, 1.5f, inner.getHeight() + 12);
-    }
-
-    if (state == KolotProcessor::State::Rendering)
-    {
-        g.setColour (bg.withAlpha (0.55f));
-        g.fillRoundedRectangle (inner.expanded (6.0f), 8.0f);
-        g.setColour (amber);
-        g.setFont (F (16.0f, true));
-        g.drawText ("The choir is learning your part...", inner, juce::Justification::centred);
-    }
-
-    // Drag-out chip
-    if (state == KolotProcessor::State::Done)
-    {
-        auto d = dragChip().toFloat();
-        g.setColour (amber.withAlpha (0.15f));
-        g.fillRoundedRectangle (d, 7.0f);
-        g.setColour (amber);
-        g.drawRoundedRectangle (d, 7.0f, 1.0f);
-        g.setFont (F (13.0f, true));
-        g.drawText (juce::String::fromUTF8 ("\xe2\x87\xa2  Drag choir to a track"), d, juce::Justification::centred);
-    }
+    g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.07f), 0, r.getY(),
+                                             juce::Colours::white.withAlpha (0.0f), 0, r.getY() + 40, false));
+    g.fillRoundedRectangle (r, 12.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.13f));
+    g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, 1.0f);
 }
 
-void WaveformPanel::mouseMove (const juce::MouseEvent& e)
+// ============================================================================
+void LiveStrip::update()
 {
-    const bool overChip = proc.getState() == KolotProcessor::State::Done && dragChip().contains (e.getPosition());
-    setMouseCursor (overChip ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::PointingHandCursor);
-}
-
-void WaveformPanel::mouseDown (const juce::MouseEvent& e)
-{
-    dragStarted = false;
-    if (proc.getState() == KolotProcessor::State::Rendering) return;
-    if (! vocalPeaks.empty() && clearChip().contains (e.getPosition())) { proc.clearVocal(); refresh(); return; }
-    if (proc.getState() == KolotProcessor::State::Done && dragChip().contains (e.getPosition())) return;
-    if (vocalPeaks.empty() || e.mods.isPopupMenu() || e.getNumberOfClicks() > 1) browse();
-}
-
-void WaveformPanel::mouseDrag (const juce::MouseEvent& e)
-{
-    if (dragStarted || proc.getState() != KolotProcessor::State::Done) return;
-    if (! dragChip().contains (e.getMouseDownPosition()) || e.getDistanceFromDragStart() < 4) return;
-    dragStarted = true;
-    const auto f = proc.writeChoirFileForDrag();
-    if (f.existsAsFile())
-        juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
-    else if (onError) onError ("Couldn't write the choir file to " + KolotProcessor::rendersFolder().getFullPathName());
-}
-
-void WaveformPanel::filesDropped (const juce::StringArray& files, int, int)
-{
-    dragOver = false;
-    if (! files.isEmpty()) load (juce::File (files[0]));
+    proc.getHistory (inH, outH);
+    const float hz = proc.getLeadHz();
+    const auto now = juce::Time::getMillisecondCounter();
+    if (hz > 0.0f)
+    {
+        shownHz = hz;
+        const float m = 69.0f + 12.0f * std::log2 (hz / 440.0f);
+        if (heldNote < 0 || std::abs (m - (float) heldNote) > 0.6f) heldNote = juce::roundToInt (m);
+        lastVoiced = now;
+    }
+    else if (now - lastVoiced > 600)
+    {
+        heldNote = -1;
+        shownHz = 0.0f;
+    }
     repaint();
 }
 
-void WaveformPanel::browse()
+void LiveStrip::paint (juce::Graphics& g)
 {
-    chooser = std::make_unique<juce::FileChooser> ("Choose a dry, mono vocal",
-                  juce::File::getSpecialLocation (juce::File::userMusicDirectory),
-                  "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.m4a;*.caf");
-    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this] (const juce::FileChooser& fc)
-                          {
-                              const auto f = fc.getResult();
-                              if (f.existsAsFile()) load (f);
-                          });
-}
+    auto r = getLocalBounds().toFloat();
+    glass (g, r);
+    auto area = getLocalBounds().reduced (18, 12);
 
-void WaveformPanel::load (const juce::File& f)
-{
-    juce::String err;
-    if (! proc.loadVocal (f, err) && onError) onError (err);
-    refresh();
+    // Lead note
+    auto left = area.removeFromLeft (150);
+    g.setColour (amber);
+    g.setFont (F (12.0f, true));
+    g.drawText ("LEAD", left.removeFromTop (16), juce::Justification::centredLeft);
+    g.setColour (ivory);
+    g.setFont (F (40.0f, true));
+    g.drawText (heldNote >= 0 ? noteName (heldNote) : juce::String::fromUTF8 ("\xe2\x80\x94"),
+                left.removeFromTop (50), juce::Justification::centredLeft);
+    g.setColour (ivoryDim);
+    g.setFont (F (12.0f));
+    g.drawText (heldNote >= 0 ? juce::String (shownHz, 1) + " Hz" : "Play the track...", left.removeFromTop (18),
+                juce::Justification::centredLeft);
+
+    // Level history (right)
+    auto graph = area.removeFromRight (300).toFloat();
+    g.setColour (amber);
+    g.setFont (F (12.0f, true));
+    g.drawText ("TRACK  /  CHOIR", graph.removeFromTop (16), juce::Justification::centredLeft);
+    graph.removeFromBottom (16);
+    {
+        auto toY = [&] (float v)
+        {
+            const float db = juce::jlimit (-60.0f, 0.0f, juce::Decibels::gainToDecibels (v, -60.0f));
+            return graph.getBottom() - (db + 60.0f) / 60.0f * graph.getHeight();
+        };
+        const int N = KolotProcessor::historySize;
+        const float dx = graph.getWidth() / (float) (N - 1);
+        juce::Path pin, pout;
+        pin.startNewSubPath (graph.getX(), graph.getBottom());
+        pout.startNewSubPath (graph.getX(), graph.getBottom());
+        for (int i = 0; i < N; ++i)
+        {
+            pin.lineTo  (graph.getX() + i * dx, toY (inH[i]));
+            pout.lineTo (graph.getX() + i * dx, toY (outH[i]));
+        }
+        pin.lineTo (graph.getRight(), graph.getBottom()); pin.closeSubPath();
+        pout.lineTo (graph.getRight(), graph.getBottom()); pout.closeSubPath();
+        g.setColour (ivory.withAlpha (0.22f));
+        g.fillPath (pin);
+        g.setColour (amber.withAlpha (0.55f));
+        g.fillPath (pout);
+        g.setColour (amberHot.withAlpha (0.9f));
+        g.strokePath (pout, juce::PathStrokeType (1.0f));
+        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        g.drawHorizontalLine ((int) graph.getBottom(), graph.getX(), graph.getRight());
+    }
+    g.setColour (ivoryDim);
+    g.setFont (F (11.0f));
+    g.drawText ("Lookahead " + juce::String (juce::roundToInt (proc.getLatencyMs())) + " ms - Logic compensates automatically",
+                juce::Rectangle<float> (graph.getX(), graph.getBottom() + 2, graph.getWidth() + 2, 14), juce::Justification::centredRight);
+
+    // What the choir sings
+    area.removeFromLeft (10);
+    area.removeFromRight (20);
+    g.setColour (amber);
+    g.setFont (F (12.0f, true));
+    g.drawText ("THE CHOIR SINGS", area.removeFromTop (16), juce::Justification::centredLeft);
+    area.removeFromTop (6);
+
+    const auto a = proc.currentArrange();
+    struct Chip { juce::String label, note; };
+    juce::Array<Chip> chips;
+    const auto rg = choirRange (a.model);
+    auto fold = [&] (int n) { while (n > rg.hi) n -= 12; while (n < rg.lo) n += 12; return n; };
+    auto add = [&] (bool on, const juce::String& lab, int shift)
+    {
+        if (! on) return;
+        chips.add ({ lab, heldNote >= 0 ? noteName (fold (heldNote + shift)) : juce::String ("-") });
+    };
+    const int n = heldNote >= 0 ? heldNote : 60;
+    add (true, "Lead", 0);
+    add (a.octaveDown, "-1 Oct", -12);
+    add (a.octaveUp, "+1 Oct", 12);
+    add (a.thirdUp, "3rd Above", diatonicShift (n, a.key, a.scale, 2, 1));
+    add (a.thirdDown, "3rd Below", diatonicShift (n, a.key, a.scale, 2, -1));
+    add (a.fifthUp, "5th Above", diatonicShift (n, a.key, a.scale, 3, 1));
+    add (a.fifthDown, "5th Below", diatonicShift (n, a.key, a.scale, 3, -1));
+
+    int x = area.getX(), y = area.getY();
+    const int cw = 86, ch = 40, gap = 6;
+    for (auto& c : chips)
+    {
+        if (x + cw > area.getRight()) { x = area.getX(); y += ch + gap; }
+        juce::Rectangle<float> cr ((float) x, (float) y, (float) cw, (float) ch);
+        g.setColour (amber.withAlpha (heldNote >= 0 ? 0.18f : 0.08f));
+        g.fillRoundedRectangle (cr, 7.0f);
+        g.setColour (amber.withAlpha (0.6f));
+        g.drawRoundedRectangle (cr, 7.0f, 1.0f);
+        g.setColour (ivory);
+        g.setFont (F (17.0f, true));
+        g.drawText (c.note, cr.withTrimmedBottom (14), juce::Justification::centred);
+        g.setColour (ivoryDim);
+        g.setFont (F (10.5f));
+        g.drawText (c.label, cr.withTrimmedTop (24), juce::Justification::centred);
+        x += cw + gap;
+    }
 }
 
 // ============================================================================
@@ -165,13 +153,12 @@ void ChoirCard::paintButton (juce::Graphics& g, bool over, bool)
 {
     auto r = getLocalBounds().toFloat().reduced (1.0f);
     const bool on = getToggleState();
-    g.setColour (on ? amber.withAlpha (0.16f) : (over ? panelHi.brighter (0.06f) : panelHi));
+    g.setColour (on ? amber.withAlpha (0.2f) : (over ? juce::Colours::white.withAlpha (0.08f) : juce::Colours::white.withAlpha (0.04f)));
     g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (on ? amber : edge);
+    g.setColour (on ? amber : juce::Colours::white.withAlpha (0.14f));
     g.drawRoundedRectangle (r, 8.0f, on ? 1.6f : 1.0f);
 
-    // Little "stage light" dot
-    g.setColour (on ? amberHot : edge.brighter (0.3f));
+    g.setColour (on ? amberHot : edge.brighter (0.4f));
     g.fillEllipse (r.getX() + 12, r.getCentreY() - 5, 10, 10);
 
     auto t = getLocalBounds().reduced (32, 6);
@@ -188,11 +175,10 @@ void ChoirCard::paintButton (juce::Graphics& g, bool over, bool)
 KolotEditor::KolotEditor (KolotProcessor& p) : AudioProcessorEditor (p), proc (p)
 {
     setLookAndFeel (&lnf);
-    setSize (980, 680);
+    background = juce::ImageCache::getFromMemory (BinaryData::background_jpg, BinaryData::background_jpgSize);
+    setSize (980, 660);
 
-    addAndMakeVisible (wave);
-    wave.onError = [this] (const juce::String& e) { errorText = e; errorUntil = juce::Time::getMillisecondCounter() + 6000; };
-    wave.refresh();
+    addAndMakeVisible (live);
 
     ChoirCard* cards[] = { &gospel, &kids, &shout };
     for (int i = 0; i < 3; ++i)
@@ -235,7 +221,8 @@ KolotEditor::KolotEditor (KolotProcessor& p) : AudioProcessorEditor (p), proc (p
 
     std::tuple<juce::Slider*, juce::Label*, const char*, const char*> knobs[] = {
         { &lowCut, &lowCutL, ParamID::lowCut, "Low Cut" },  { &bright, &brightL, ParamID::brightness, "Brightness" },
-        { &reverb, &reverbL, ParamID::reverb, "Reverb" },   { &output, &outputL, ParamID::output, "Output" } };
+        { &reverb, &reverbL, ParamID::reverb, "Reverb" },   { &mix, &mixL, ParamID::mix, "Mix" },
+        { &output, &outputL, ParamID::output, "Output" } };
     for (auto& [s, l, id, name] : knobs)
     {
         s->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
@@ -251,40 +238,10 @@ KolotEditor::KolotEditor (KolotProcessor& p) : AudioProcessorEditor (p), proc (p
         l->setColour (juce::Label::textColourId, ivoryDim);
         addAndMakeVisible (*l);
     }
+    mix.setTooltip ("0% = only your track, 100% = only the choir");
     output.setDoubleClickReturnValue (true, 0.0);
     bright.setDoubleClickReturnValue (true, 0.0);
-
-    preview.onClick = [this] { proc.setPreviewPlaying (! proc.isPreviewPlaying()); };
-    addAndMakeVisible (preview);
-
-    exportBtn.onClick = [this]
-    {
-        chooser = std::make_unique<juce::FileChooser> ("Export choir", KolotProcessor::rendersFolder().getChildFile (
-                       (proc.getVocalFile().getFileNameWithoutExtension().isEmpty() ? juce::String ("Vocal")
-                                                                                     : proc.getVocalFile().getFileNameWithoutExtension())
-                       + "_Kolot.wav"), "*.wav");
-        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
-                              [this] (const juce::FileChooser& fc)
-                              {
-                                  auto f = fc.getResult();
-                                  if (f == juce::File()) return;
-                                  if (! proc.exportChoirTo (f.withFileExtension ("wav")))
-                                  { errorText = "Export failed."; errorUntil = juce::Time::getMillisecondCounter() + 5000; }
-                              });
-    };
-    addAndMakeVisible (exportBtn);
-
-    create.getProperties().set ("big", true);
-    create.onClick = [this]
-    {
-        if (proc.getState() == KolotProcessor::State::Rendering) proc.cancelRender();
-        else proc.createVocals();
-    };
-    addAndMakeVisible (create);
-
-    status.setFont (F (13.0f));
-    status.setColour (juce::Label::textColourId, ivoryDim);
-    addAndMakeVisible (status);
+    mix.setDoubleClickReturnValue (true, 1.0);
 
     startTimerHz (30);
     timerCallback();
@@ -300,14 +257,9 @@ void KolotEditor::setChoice (const char* id, int index)
 
 int KolotEditor::getChoice (const char* id) const { return (int) proc.apvts.getRawParameterValue (id)->load(); }
 
-void KolotEditor::drawPanel (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title)
+void KolotEditor::drawGlass (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title)
 {
-    auto f = r.toFloat();
-    g.setGradientFill (juce::ColourGradient (panel.brighter (0.03f), 0, f.getY(), panel.darker (0.15f), 0, f.getBottom(), false));
-    g.fillRoundedRectangle (f, 12.0f);
-    g.setColour (edge);
-    g.drawRoundedRectangle (f.reduced (0.5f), 12.0f, 1.0f);
-    // engraved title
+    glass (g, r.toFloat());
     g.setFont (F (12.0f, true));
     g.setColour (amber);
     g.drawText (title.toUpperCase(), r.reduced (16, 10).removeFromTop (16), juce::Justification::centredLeft);
@@ -315,27 +267,30 @@ void KolotEditor::drawPanel (juce::Graphics& g, juce::Rectangle<int> r, const ju
 
 void KolotEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (bg);
-    // Soft "stage light" glow behind the header.
-    g.setGradientFill (juce::ColourGradient (amber.withAlpha (0.10f), getWidth() * 0.5f, 0,
-                                             amber.withAlpha (0.0f), getWidth() * 0.5f, 220, true));
-    g.fillRect (getLocalBounds().removeFromTop (220));
+    if (background.isValid())
+        g.drawImage (background, getLocalBounds().toFloat(), juce::RectanglePlacement::fillDestination);
+    else
+        g.fillAll (bg);
 
-    // Logo
-    g.setColour (ivory);
-    g.setFont (F (28.0f, true));
-    g.drawText ("K O L O T", 24, 14, 220, 36, juce::Justification::centredLeft);
-    g.setColour (amber);
-    g.setFont (F (17.0f, true));
-    g.drawText (juce::String::fromUTF8 ("\xd7\xa7\xd7\x95\xd7\x9c\xd7\x95\xd7\xaa"), 196, 18, 70, 30, juce::Justification::centredLeft);
-    g.setColour (ivoryDim);
+    // Logo, with a soft shadow so it reads over the sky.
+    auto shadowText = [&] (const juce::String& s, juce::Rectangle<int> r, juce::Colour c, float size, bool bold)
+    {
+        g.setFont (F (size, bold));
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.drawText (s, r.translated (0, 2), juce::Justification::centredLeft);
+        g.setColour (c);
+        g.drawText (s, r, juce::Justification::centredLeft);
+    };
+    shadowText ("K O L O T", { 24, 14, 200, 36 }, ivory, 28.0f, true);
+    shadowText (juce::String::fromUTF8 ("\xd7\xa7\xd7\x95\xd7\x9c\xd7\x95\xd7\xaa"), { 200, 18, 70, 30 }, amberHot, 17.0f, true);
+    shadowText ("CHOIR EFFECT  -  your track, sung by a whole choir", { 274, 18, 440, 30 }, ivory.withAlpha (0.8f), 12.0f, false);
     g.setFont (F (12.0f));
-    g.drawText ("CHOIR ENGINE  -  sings your part with a whole choir", 270, 18, 420, 30, juce::Justification::centredLeft);
-    g.drawText ("v1.0  -  by Alon Meller", getWidth() - 224, 18, 200, 30, juce::Justification::centredRight);
+    g.setColour (ivory.withAlpha (0.75f));
+    g.drawText ("v2.0  -  by Alon Meller", getWidth() - 224, 18, 200, 30, juce::Justification::centredRight);
 
-    drawPanel (g, choirPanel, "Choir");
-    drawPanel (g, arrangePanel, "Arrange");
-    drawPanel (g, finishPanel, "Finish");
+    drawGlass (g, choirPanel, "Choir");
+    drawGlass (g, arrangePanel, "Arrange");
+    drawGlass (g, finishPanel, "Finish");
 
     g.setFont (F (11.5f, true));
     g.setColour (ivoryDim);
@@ -352,15 +307,14 @@ void KolotEditor::paint (juce::Graphics& g)
 void KolotEditor::resized()
 {
     const int W = getWidth();
-    wave.setBounds (20, 62, W - 40, 190);
+    live.setBounds (20, 64, W - 40, 128);
 
-    const int top = 266, h = 330, gap = 14;
+    const int top = 206, h = 330, gap = 14;
     const int pw = (W - 40 - 2 * gap) / 3;
     choirPanel   = { 20, top, pw, h };
     arrangePanel = { 20 + pw + gap, top, pw, h };
     finishPanel  = { 20 + 2 * (pw + gap), top, pw, h };
 
-    // Choir panel
     {
         auto r = choirPanel.reduced (14).withTrimmedTop (24);
         gospel.setBounds (r.removeFromTop (52)); r.removeFromTop (8);
@@ -372,7 +326,6 @@ void KolotEditor::resized()
         micBtn[0].setBounds (row1.removeFromLeft (bw)); row1.removeFromLeft (6); micBtn[1].setBounds (row1);
         micBtn[2].setBounds (row2.removeFromLeft (bw)); row2.removeFromLeft (6); micBtn[3].setBounds (row2);
     }
-    // Arrange panel
     {
         auto r = arrangePanel.reduced (14).withTrimmedTop (42);
         auto row = r.removeFromTop (30);
@@ -391,28 +344,23 @@ void KolotEditor::resized()
         row = r.removeFromTop (30);
         stereoBtn.setBounds (row.removeFromLeft (bw)); row.removeFromLeft (6); monoBtn.setBounds (row);
     }
-    // Finish panel
     {
-        auto r = finishPanel.reduced (14).withTrimmedTop (30);
-        auto rowA = r.removeFromTop (r.getHeight() / 2);
-        auto rowB = r.withTrimmedTop (8);
+        auto r = finishPanel.reduced (12).withTrimmedTop (30);
         auto place = [] (juce::Rectangle<int> area, juce::Slider& s, juce::Label& l)
         {
             l.setBounds (area.removeFromTop (18));
             s.setBounds (area);
         };
-        const int kw = rowA.getWidth() / 2;
-        place (rowA.removeFromLeft (kw), lowCut, lowCutL); place (rowA, bright, brightL);
-        place (rowB.removeFromLeft (kw), reverb, reverbL); place (rowB, output, outputL);
+        auto rowA = r.removeFromTop (r.getHeight() / 2);
+        auto rowB = r.withTrimmedTop (8);
+        const int kw = rowA.getWidth() / 3;
+        place (rowA.removeFromLeft (kw), lowCut, lowCutL);
+        place (rowA.removeFromLeft (kw), bright, brightL);
+        place (rowA, reverb, reverbL);
+        const int kw2 = rowB.getWidth() / 2;
+        place (rowB.removeFromLeft (kw2).reduced (14, 0), mix, mixL);
+        place (rowB.reduced (14, 0), output, outputL);
     }
-    // Bottom bar
-    auto bar = juce::Rectangle<int> (20, top + h + 16, W - 40, 50);
-    create.setBounds (bar.removeFromRight (260));
-    bar.removeFromRight (12);
-    exportBtn.setBounds (bar.removeFromRight (100).reduced (0, 6));
-    bar.removeFromRight (8);
-    preview.setBounds (bar.removeFromRight (110).reduced (0, 6));
-    status.setBounds (bar);
 }
 
 void KolotEditor::timerCallback()
@@ -434,32 +382,6 @@ void KolotEditor::timerCallback()
     stereoBtn.setToggleState (st, juce::dontSendNotification);
     monoBtn.setToggleState (! st, juce::dontSendNotification);
 
-    const auto state = proc.getState();
-    const bool rendering = state == KolotProcessor::State::Rendering;
-    create.setEnabled (state != KolotProcessor::State::Empty);
-    create.setButtonText (rendering ? "Cancel" : (proc.needsRerender() ? "Update Vocals" : "Create Vocals"));
-    create.getProperties().set ("progress", rendering ? (double) proc.getProgress() : -1.0);
-    create.repaint();
-
-    const bool done = state == KolotProcessor::State::Done;
-    preview.setEnabled (done);
-    exportBtn.setEnabled (done);
-    preview.setButtonText (proc.isPreviewPlaying() ? "Stop" : "Preview");
-    preview.setToggleState (proc.isPreviewPlaying(), juce::dontSendNotification);
-
-    if (juce::Time::getMillisecondCounter() < errorUntil)
-    {
-        status.setColour (juce::Label::textColourId, rose);
-        status.setText (errorText, juce::dontSendNotification);
-    }
-    else
-    {
-        status.setColour (juce::Label::textColourId, ivoryDim);
-        status.setText (proc.getStatusText(), juce::dontSendNotification);
-    }
-
-    const int cc = proc.getChangeCounter();
-    if (cc != lastChange) { lastChange = cc; wave.refresh(); }
-    else if (rendering || proc.isPreviewPlaying()) wave.repaint();
+    live.update();
 }
 } // namespace kolot
